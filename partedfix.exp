@@ -1,0 +1,215 @@
+#! /usr/local/bin/expect
+#
+# @(!--#) @(#) partedfix.exp, version 001, 28-september-2023
+#
+# run parted interactively and reply "fix" is prompted
+#
+
+set DEBUG 0
+
+source "ssh.inc"
+
+########################################################################
+
+proc usage {} {
+  global progname
+
+  send_error "$progname: usage: $progname -h host -u user -p password \[ -s sudopassword ] -d diskname\n"
+
+  exit 2
+}
+
+########################################################################
+
+#
+# Main
+#
+
+# get program/script name
+set progname [file tail $argv0]
+
+# print usage message if no command line arguments
+if {[llength $argv] < 1} {
+  usage
+}
+
+# set default command line argument values
+set hostname ""
+set username ""
+set password ""
+set sudopassword ""
+set diskname ""
+
+# process command line options
+set argc [llength $argv]
+set i 0
+while {$i < $argc} {
+  set arg [lindex $argv $i]
+
+  if {[string equal $arg "-h"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting hostname after \"-h\" argument\n"
+      exit 1
+    }
+    set hostname [lindex $argv $i]
+  } elseif {[string equal $arg "-u"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting username after \"-u\" argument\n"
+      exit 1
+    }
+    set username [lindex $argv $i]
+  } elseif {[string equal $arg "-p"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting password after \"-p\" argument\n"
+      exit 1
+    }
+    set password [lindex $argv $i]
+  } elseif {[string equal $arg "-s"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting sudo password after \"-s\" argument\n"
+      exit 1
+    }
+    set sudopassword [lindex $argv $i]
+  } elseif {[string equal $arg "-d"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting disk name after \"-d\" argument\n"
+      exit 1
+    }
+    set diskname [lindex $argv $i]
+  } else {
+    send_error "$progname: unrecognised command line option/argument \"$arg\"\n"
+    usage
+  }
+
+  incr i
+}
+
+# print out command line arguments
+if {$DEBUG != 0} {
+  puts "Hostname ............: <$hostname>"
+  puts "Username ............: <$username>"
+  puts "Password ............: <$password>"
+  puts "Diskname.............: <$diskname>"
+}
+
+# ensure a hostname was specified
+if {[string equal $hostname ""]} {
+  send_error "$progname: no hostname specified\n"
+  exit 1
+}
+
+# ensure a username was specified
+if {[string equal $username ""]} {
+  send_error "$progname: no username specified\n"
+  exit 1
+}
+
+# ensure a password was specified
+if {[string equal $password ""]} {
+  send_error "$progname: no password specified\n"
+  exit 1
+}
+
+# ensure a diskname was specified
+if {[string equal $diskname ""]} {
+  send_error "$progname: no disk name specified\n"
+  exit 1
+}
+
+# if no sudopassword specified then set it to password
+if {[string equal $sudopassword ""]} {
+  set sudopassword $password
+}
+
+# handle environment variable for ssh password
+set password [sshpassenv $password "ssh password"]
+
+# handle environment variable for sudo password
+set sudopassword [sshpassenv $sudopassword "sudo password"]
+
+# print out password and sudo password arguments again as if they were ENVs the will be looked up now
+if {$DEBUG} {
+  puts "Password ............: <$password>"
+  puts "Sudo password .......: <$sudopassword>"
+}
+
+# start the ssh command
+spawn ssh [set username]@[set hostname]
+
+# login using ssh via source sshlogin procedure
+sshlogin $password
+
+# get sudo priviledge via sourced sshsudo procedure
+sshsudo $username $sudopassword
+
+# send the parted command
+send "sudo parted $diskname\r"
+
+# wait for parted interactive prompt
+expect {
+  timeout {
+    send_error "\n$progname: timeout waiting for initial parted prompt\n"
+    exit 1
+  }
+  eof {
+    send_error "\n$progname: end of file waiting for initial parted prompt\n"
+    exit 1
+  }
+  "(parted) " {
+    # fall through
+  }
+}
+
+# send the "print" command to print the partition table
+send "print\r"
+
+# start a loop in case fix prompt is displayed
+while {1} {
+  expect {
+    timeout {
+      send_error "\n$progname: timeout waiting for parted prompt after print command\n"
+      exit 1
+    }
+    eof {
+      send_error "\n$progname: end of file waiting for parted prompt after print command\n"
+      exit 1
+    }
+    "Fix/Ignore/Cancel? " {
+      send "fix\r"
+    }
+    "Fix/Ignore? " {
+      send "fix\r"
+    }
+    "(parted) " {
+      break
+    }
+  }
+}
+
+# send the quit command
+send "quit\r"
+
+expect {
+  timeout {
+    send_error "\n$progname: timeout waiting for Linux command prompt after quit command\n"
+    exit 1
+  }
+  eof {
+    send_error "\n$progname: end of file waiting for Linux command prompt after quit command\n"
+    exit 1
+  }
+  "$ " {
+    # fall through
+  }
+}
+
+# close the ssh connection via sourced sshclose procedure
+sshclose
+
+# if control gets here then exit success
+exit 0
