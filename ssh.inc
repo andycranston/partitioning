@@ -31,6 +31,8 @@ proc sshpassenv {password description} {
 # #############################################################
 
 proc sshlogin {password} {
+  global progname
+
   # set a password count to zero
   set pcount 0
 
@@ -71,6 +73,8 @@ proc sshlogin {password} {
 # #############################################################
 
 proc sshsudo {username sudopassword} {
+  global progname
+
   # reset sudo caching (if any)
   send "sudo -K\r"
 
@@ -125,6 +129,8 @@ proc sshsudo {username sudopassword} {
 # #############################################################
 
 proc sshclose {} {
+  global progname
+
   # send exit command to shutdown ssh connection
   send "exit\r"
 
