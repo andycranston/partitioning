@@ -1,0 +1,326 @@
+#! /usr/local/bin/expect
+#
+# @(!--#) @(#) copyscript.exp, version 003, 27-september-2023
+#
+# copy a script to another host a line at a line over ssh
+#
+
+set DEBUG 1
+
+########################################################################
+
+proc usage {} {
+  global progname
+
+  send_error "$progname: usage: $progname -h host -u user -p password -s script \[ -d directory ]\n"
+
+  exit 2
+}
+
+########################################################################
+
+proc handlemetachars {line} {
+
+  set mline ""
+
+  for {set i 0} {$i < [string length $line]} {incr i} {
+    set c [string index $line $i]
+
+    if {[string compare $c "\\"] == 0} {
+      set mline "$mline\\\\"
+      continue
+    }
+
+    if {[string compare $c "\""] == 0} {
+      set mline "$mline\\\""
+      continue
+    }
+
+    if {[string compare $c "\$"] == 0} {
+      set mline "$mline\\\$"
+      continue
+    }
+
+    if {[string compare $c "`"] == 0} {
+      set mline "$mline\\\`"
+      continue
+    }
+
+    if {[string compare $c "!"] == 0} {
+      set mline "$mline\"\'!\'\""
+      continue
+    }
+
+    set mline "$mline$c"
+  }
+
+  return $mline
+}
+
+########################################################################
+
+#
+# Main
+#
+
+# get program/script name
+set progname [file tail $argv0]
+
+# print usage message if no command line arguments
+if {[llength $argv] < 1} {
+  usage
+}
+
+# set default command line argument values
+set hostname ""
+set username ""
+set password ""
+set script ""
+set directory ""
+
+# process command line options
+set argc [llength $argv]
+set i 0
+while {$i < $argc} {
+  set arg [lindex $argv $i]
+
+  if {[string equal $arg "-h"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting hostname after \"-h\" argument\n"
+      exit 1
+    }
+    set hostname [lindex $argv $i]
+  } elseif {[string equal $arg "-u"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting username after \"-u\" argument\n"
+      exit 1
+    }
+    set username [lindex $argv $i]
+  } elseif {[string equal $arg "-p"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting password after \"-p\" argument\n"
+      exit 1
+    }
+    set password [lindex $argv $i]
+  } elseif {[string equal $arg "-s"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting script name after \"-s\" argument\n"
+      exit 1
+    }
+    set script [lindex $argv $i]
+  } elseif {[string equal $arg "-d"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting remote directory after \"-d\" argument\n"
+      exit 1
+    }
+    set directory [lindex $argv $i]
+  } else {
+    send_error "$progname: unrecognised command line option/argument \"$arg\"\n"
+    usage
+  }
+
+  incr i
+}
+
+# print out command line arguments
+if {$DEBUG != 0} {
+  puts "Hostname ............: <$hostname>"
+  puts "Username ............: <$username>"
+  puts "Password ............: <$password>"
+  puts "Script ..............: <$script>"
+  puts "Directory ...........: <$directory>"
+}
+
+# ensure a hostname was specified
+if {[string equal $hostname ""]} {
+  send_error "$progname: no hostname specified\n"
+  exit 1
+}
+
+# ensure a username was specified
+if {[string equal $username ""]} {
+  send_error "$progname: no username specified\n"
+  exit 1
+}
+
+# ensure a password was specified
+if {[string equal $password ""]} {
+  send_error "$progname: no password specified\n"
+  exit 1
+}
+
+# ensure a script was specified
+if {[string equal $script ""]} {
+  send_error "$progname: no command script specified\n"
+  exit 1
+}
+
+# is the password enclosed in [ and ] brackets?
+if {[string length $password] >= 3} {
+  if {[string compare [string index $password 0] "\["] == 0} {
+    if {[string compare [string index $password [expr [string length $password] - 1]] "]"] == 0} {
+      set passwordenv [string range $password 1 [expr [string length $password] - 2]]
+
+      if {[catch {set password $env($passwordenv)}] != 0} {
+        send_error "$progname: the password environment variable \"$passwordenv\" is not set\n"
+        exit 1
+      }
+    }
+  }
+}
+
+# print out password and sudo password arguments again as if they were ENVs the will be looked up now
+if {$DEBUG} {
+  puts "Password ............: <$password>"
+}
+
+# open the script file
+if {[catch {open "$script" "r"} scripthandle]} {
+  send_error "$progname: cannot open script filename \"$script\" for reading\n"
+  exit 1
+}
+
+# keep a record of password request attempts
+set passwordcount 0
+
+# start the ssh command
+spawn ssh [set username]@[set hostname]
+
+# start login loop
+while {1} {
+  expect {
+    timeout {
+      send_error "\n$progname: timeout during login\n"
+      exit 1
+    }
+    eof {
+      send_error "\n$progname: eof during login\n"
+      exit 1
+    }
+    "Host key verification failed.\r" {
+      send_error "$progname: host key issue prevents connection\n"
+      exit 1
+    }
+    "Are you sure you want to continue connecting*\\? " {
+      send "yes\r"
+    }
+    "'s password: " {
+      incr passwordcount
+      if {$passwordcount > 1} {
+        send_error "\n$progname: too many password attempts\n"
+        exit 1
+      }
+      send "$password\r"
+    }
+    "$ " {
+      # prompt
+      break
+    }
+  }
+}
+
+# is directory specified
+if {[string equal $directory ""]} {
+  # not specified - nothing to do
+} else {
+  send "cd $directory\r"
+
+  expect {
+    timeout {
+      send_error "\n$progname: timeout changng to directory \"$directory\"\n"
+      exit 1
+    }
+    eof {
+      send_error "\n$progname: eof during changng to directory \"$directory\"\n"
+      exit 1
+    }
+    "$ " {
+      # fall through
+    }
+  }
+}
+
+# take a backup
+send "cp \"$script\" \"$script\".`date '+%s'`\r"
+
+# wait for prompt
+expect {
+  timeout {
+    send_error "\n$progname: timeout after backing up \"$script\"\n"
+    exit 1
+  }
+  eof {
+    send_error "\n$progname: eof after backing up \"$script\"\n"
+    exit 1
+  }
+  "$ " {
+    # fall through
+  }
+}
+
+# nullify the file
+send "cp /dev/null \"$script\"\r"
+
+# wait for prompt
+expect {
+  timeout {
+    send_error "\n$progname: timeout nullifying file \"$script\"\n"
+    exit 1
+  }
+  eof {
+    send_error "\n$progname: eof nullifying file \"$script\"\n"
+    exit 1
+  }
+  "$ " {
+    # fall through
+  }
+}
+
+# read lines from the command file
+while {[gets $scripthandle line] != -1} {
+  # handle odd shel meta characters
+  set line [handlemetachars $line]
+
+  # send current line and add it to the script
+  send "echo \"$line\" >>\"$script\"\r"
+  
+  # wait for echo to complete
+  expect {
+   timeout {
+      send_error "\n$progname: command timeout after echo\n"
+      exit 1
+    }
+    eof {
+      send_error "\n$progname: eof after echo\n"
+      exit 1
+    }
+    "$ " {
+      # fall through
+    }
+  }
+}
+
+# time to exit
+send "exit\r"
+
+# wait for eof
+expect {
+  eof {
+    # fall through
+  }
+  timeout {
+    send_error "\n$progname: time out waiting for connection to close\n"
+    exit 1
+  }
+}
+
+# close the script file
+close $scripthandle
+
+# if control gets here then exit success
+exit 0
