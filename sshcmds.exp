@@ -1,0 +1,361 @@
+#! /usr/local/bin/expect
+#
+# @(!--#) @(#) sshcmds.exp, version 007, 27-september-2023
+#
+# ssh into a host, run some commands and logout
+#
+
+set DEBUG 0
+
+########################################################################
+
+proc usage {} {
+  global progname
+
+  send_error "$progname: usage: $progname \[ -t timeout ] \[ -s sudopassword ] \[ -n newuserpass ] -h host -u user -p password -c command_filename\n"
+
+  exit 2
+}
+
+########################################################################
+
+#
+# Main
+#
+
+# get program/script name
+set progname [file tail $argv0]
+
+# print usage message if no command line arguments
+if {[llength $argv] < 1} {
+  usage
+}
+
+# set default command line argument values
+set sshtimeout "10"
+set hostname ""
+set username ""
+set password ""
+set sudopassword ""
+set cmdfilename ""
+set newuserpass ""
+
+# process command line options
+set argc [llength $argv]
+set i 0
+while {$i < $argc} {
+  set arg [lindex $argv $i]
+
+  if {[string equal $arg "-h"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting hostname after \"-h\" argument\n"
+      exit 1
+    }
+    set hostname [lindex $argv $i]
+  } elseif {[string equal $arg "-u"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting username after \"-u\" argument\n"
+      exit 1
+    }
+    set username [lindex $argv $i]
+  } elseif {[string equal $arg "-p"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting password after \"-p\" argument\n"
+      exit 1
+    }
+    set password [lindex $argv $i]
+  } elseif {[string equal $arg "-s"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting sudo password after \"-s\" argument\n"
+      exit 1
+    }
+    set sudopassword [lindex $argv $i]
+  } elseif {[string equal $arg "-c"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting command filename after \"-c\" argument\n"
+      exit 1
+    }
+    set cmdfilename [lindex $argv $i]
+  } elseif {[string equal $arg "-t"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting timeout after \"-t\" argument\n"
+      exit 1
+    }
+    set sshtimeout [lindex $argv $i]
+  } elseif {[string equal $arg "-n"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting new user password after \"-n\" argument\n"
+      exit 1
+    }
+    set newuserpass [lindex $argv $i]
+  } else {
+    send_error "$progname: unrecognised command line option/argument \"$arg\"\n"
+    usage
+  }
+
+  incr i
+}
+
+# print out command line arguments
+if {$DEBUG != 0} {
+  puts "Hostname ............: <$hostname>"
+  puts "Username ............: <$username>"
+  puts "Password ............: <$password>"
+  puts "Command file ........: <$cmdfilename>"
+  puts "New user password ...: <$newuserpass>"
+  puts "ssh timeout .........: <$sshtimeout>"
+}
+
+# ensure a hostname was specified
+if {[string equal $hostname ""]} {
+  send_error "$progname: no hostname specified\n"
+  exit 1
+}
+
+# ensure a username was specified
+if {[string equal $username ""]} {
+  send_error "$progname: no username specified\n"
+  exit 1
+}
+
+# ensure a password was specified
+if {[string equal $password ""]} {
+  send_error "$progname: no password specified\n"
+  exit 1
+}
+
+# ensure a command filename was specified
+if {[string equal $cmdfilename ""]} {
+  send_error "$progname: no command filename specified\n"
+  exit 1
+}
+
+# if no sudopassword specified then set it to password
+if {[string equal $sudopassword ""]} {
+  set sudopassword $password
+}
+
+# print out sudo password arguments
+if {$DEBUG} {
+  puts "Sudo Password ...: <$sudopassword>"
+}
+
+# is the password enclosed in [ and ] brackets?
+if {[string length $password] >= 3} {
+  if {[string compare [string index $password 0] "\["] == 0} {
+    if {[string compare [string index $password [expr [string length $password] - 1]] "]"] == 0} {
+      set passwordenv [string range $password 1 [expr [string length $password] - 2]]
+
+      if {[catch {set password $env($passwordenv)}] != 0} {
+        send_error "$progname: the password environment variable \"$passwordenv\" is not set\n"
+        exit 1
+      }
+    }
+  }
+}
+
+# is the sudopassword enclosed in [ and ] brackets?
+if {[string length $sudopassword] >= 3} {
+  if {[string compare [string index $sudopassword 0] "\["] == 0} {
+    if {[string compare [string index $sudopassword [expr [string length $sudopassword] - 1]] "]"] == 0} {
+      set passwordenv [string range $sudopassword 1 [expr [string length $sudopassword] - 2]]
+
+      if {[catch {set sudopassword $env($passwordenv)}] != 0} {
+        send_error "$progname: the password environment variable \"$passwordenv\" is not set\n"
+        exit 1
+      }
+    }
+  }
+}
+
+# is the newuserpass enclosed in [ and ] brackets?
+if {[string length $newuserpass] >= 3} {
+  if {[string compare [string index $newuserpass 0] "\["] == 0} {
+    if {[string compare [string index $newuserpass [expr [string length $newuserpass] - 1]] "]"] == 0} {
+      set passwordenv [string range $newuserpass 1 [expr [string length $newuserpass] - 2]]
+
+      if {[catch {set newuserpass $env($passwordenv)}] != 0} {
+        send_error "$progname: the password environment variable \"$passwordenv\" is not set\n"
+        exit 1
+      }
+    }
+  }
+}
+
+# print out password and sudo password arguments again as if they were ENVs the will be looked up now
+if {$DEBUG} {
+  puts "Password ............: <$password>"
+  puts "Sudo Password .......: <$sudopassword>"
+  puts "New user password ...: <$newuserpass>"
+}
+
+# open the command file
+if {[catch {open "$cmdfilename" "r"} cmdfile]} {
+  send_error "$progname: cannot open command filename \"$cmdfilename\" for reading\n"
+  exit 1
+}
+
+# keep a record of password request attempts
+set passwordcount 0
+
+# set timeout
+set timeout $sshtimeout
+
+# start the ssh command
+spawn ssh [set username]@[set hostname]
+
+# start login loop
+while {1} {
+  expect {
+    timeout {
+      send_error "\n$progname: timeout during login\n"
+      exit 1
+    }
+    eof {
+      send_error "\n$progname: eof during login\n"
+      exit 1
+    }
+    "Host key verification failed.\r" {
+      send_error "$progname: host key issue prevents connection\n"
+      exit 1
+    }
+    "Are you sure you want to continue connecting*\\? " {
+      send "yes\r"
+    }
+    "'s password: " {
+      incr passwordcount
+      if {$passwordcount > 1} {
+        send_error "\n$progname: too many password attempts\n"
+        exit 1
+      }
+      send "$password\r"
+    }
+    "$ " {
+      # prompt
+      break
+    }
+  }
+}
+
+# reset sudo caching (if any)
+send "sudo -K\r"
+
+# should get prompt back
+expect {
+  timeout {
+    send_error "\n$progname: sudo -K timeout after $sshtimeout seconds\n"
+    exit 1
+  }
+  eof {
+    send_error "\n$progname: end of file while running sudo -K command\n"
+    exit 1
+  }
+  "$ " {
+    # fall through
+  }
+}
+
+# run "sudo id" to force prompting of sudo password
+send "sudo id\r"
+
+# set password count back to zero
+set passwordcount 0
+
+# use a loop so we can catch the sudo password prompt if it is going to be displayed
+while {1} {
+  expect {
+    timeout {
+      send_error "\n$progname: timeout during sudo id command\n"
+      exit 1
+    }
+    eof {
+      send_error "\n$progname: eof during sudo id command\n"
+      exit 1
+    }
+    "\\\[sudo] password for $username: " {
+      incr passwordcount
+      if {$passwordcount > 1} {
+        send_error "\n$progname: too many password attempts\n"
+        exit 1
+      }
+      send "$sudopassword\r"
+    }
+    "$ " {
+      # prompt
+      break
+    }
+  }
+}
+
+# read lines from the command file
+while {[gets $cmdfile line] != -1} {
+  # trim white space
+  set line [string trim $line]
+
+  # continue if a blank line
+  if {$line == ""} {
+    continue
+  }
+
+  # if line starts with a coment character thencontinue (i.e. skip it)
+  if {[string compare [string index $line 0] "#"] == 0} {
+    continue
+  }
+
+  # send command
+  send "$line\r"
+  
+  # wait for command to complete
+  while {1} {
+    expect {
+      timeout {
+        send_error "\n$progname: command timeout after $sshtimeout seconds\n"
+        exit 1
+      }
+      eof {
+        send_error "\n$progname: end of file while running command\n"
+        exit 1
+      }
+      "New password: " {
+        if {$newuserpass != ""} {
+          send "$newuserpass\r"
+        }
+      }
+      "Retype new password: " {
+        if {$newuserpass != ""} {
+          send "$newuserpass\r"
+        }
+      }
+      "$ " {
+        break
+      }
+    }
+  }
+}
+
+# time to exit
+send "exit\r"
+
+# wait for eof
+expect {
+  eof {
+    # fall through
+  }
+  timeout {
+    send_error "\n$progname: time out waiting for connection to close\n"
+    exit 1
+  }
+}
+
+# close the command file
+close $cmdfile
+
+# if control gets here then exit success
+exit 0
