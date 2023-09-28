@@ -1,11 +1,13 @@
 #! /usr/local/bin/expect
 #
-# @(!--#) @(#) copyscript.exp, version 003, 27-september-2023
+# @(!--#) @(#) copyscript.exp, version 004, 27-september-2023
 #
 # copy a script to another host a line at a line over ssh
 #
 
-set DEBUG 1
+set DEBUG 0
+
+source "ssh.inc"
 
 ########################################################################
 
@@ -160,19 +162,8 @@ if {[string equal $script ""]} {
   exit 1
 }
 
-# is the password enclosed in [ and ] brackets?
-if {[string length $password] >= 3} {
-  if {[string compare [string index $password 0] "\["] == 0} {
-    if {[string compare [string index $password [expr [string length $password] - 1]] "]"] == 0} {
-      set passwordenv [string range $password 1 [expr [string length $password] - 2]]
-
-      if {[catch {set password $env($passwordenv)}] != 0} {
-        send_error "$progname: the password environment variable \"$passwordenv\" is not set\n"
-        exit 1
-      }
-    }
-  }
-}
+# handle environment variable for ssh password
+set password [sshpassenv $password "ssh password"]
 
 # print out password and sudo password arguments again as if they were ENVs the will be looked up now
 if {$DEBUG} {
@@ -185,50 +176,17 @@ if {[catch {open "$script" "r"} scripthandle]} {
   exit 1
 }
 
-# keep a record of password request attempts
-set passwordcount 0
-
 # start the ssh command
 spawn ssh [set username]@[set hostname]
 
-# start login loop
-while {1} {
-  expect {
-    timeout {
-      send_error "\n$progname: timeout during login\n"
-      exit 1
-    }
-    eof {
-      send_error "\n$progname: eof during login\n"
-      exit 1
-    }
-    "Host key verification failed.\r" {
-      send_error "$progname: host key issue prevents connection\n"
-      exit 1
-    }
-    "Are you sure you want to continue connecting*\\? " {
-      send "yes\r"
-    }
-    "'s password: " {
-      incr passwordcount
-      if {$passwordcount > 1} {
-        send_error "\n$progname: too many password attempts\n"
-        exit 1
-      }
-      send "$password\r"
-    }
-    "$ " {
-      # prompt
-      break
-    }
-  }
-}
+# login using ssh via source sshlogin procedure
+sshlogin $password
 
 # is directory specified
 if {[string equal $directory ""]} {
   # not specified - nothing to do
 } else {
-  send "cd $directory\r"
+  send "cd \"$directory\"\r"
 
   expect {
     timeout {
@@ -305,19 +263,8 @@ while {[gets $scripthandle line] != -1} {
   }
 }
 
-# time to exit
-send "exit\r"
-
-# wait for eof
-expect {
-  eof {
-    # fall through
-  }
-  timeout {
-    send_error "\n$progname: time out waiting for connection to close\n"
-    exit 1
-  }
-}
+# close the ssh connection via sourced sshclose procedure
+sshclose
 
 # close the script file
 close $scripthandle
