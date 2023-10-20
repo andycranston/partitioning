@@ -1,11 +1,11 @@
 #! /usr/local/bin/expect
 #
-# @(!--#) @(#) sshcmds.exp, version 010, 28-september-2023
+# @(!--#) @(#) sshcmds.exp, version 011, 28-september-2023
 #
 # ssh into a host, run some commands and logout
 #
 
-set DEBUG 0
+set DEBUG 1
 
 source "ssh.inc"
 
@@ -14,7 +14,7 @@ source "ssh.inc"
 proc usage {} {
   global progname
 
-  send_error "$progname: usage: $progname \[ -s sudopassword ] \[ -n newuserpass ] -h host -u user -p password -c command_filename\n"
+  send_error "$progname: usage: $progname \[ -s sudopassword ] \[ -n newuserpass ] \[ -l firstline ... ] -h host -u user -p password -c command_filename\n"
 
   exit 2
 }
@@ -40,6 +40,7 @@ set password ""
 set sudopassword ""
 set cmdfilename ""
 set newuserpass ""
+set firstlines [list]
 
 # process command line options
 set argc [llength $argv]
@@ -89,6 +90,13 @@ while {$i < $argc} {
       exit 1
     }
     set newuserpass [lindex $argv $i]
+  } elseif {[string equal $arg "-l"]} {
+    incr i
+    if {$i >= $argc} {
+      send_error "$progname: expecting line text after \"-l\" argument\n"
+      exit 1
+    }
+    lappend firstlines [lindex $argv $i]
   } else {
     send_error "$progname: unrecognised command line option/argument \"$arg\"\n"
     usage
@@ -104,6 +112,10 @@ if {$DEBUG != 0} {
   puts "Password ............: <$password>"
   puts "Command file ........: <$cmdfilename>"
   puts "New user password ...: <$newuserpass>"
+  puts "First lines:"
+  foreach line $firstlines {
+    puts "  <$line>"
+  }
 }
 
 # ensure a hostname was specified
@@ -137,7 +149,7 @@ if {[string equal $sudopassword ""]} {
 
 # print out sudo password arguments
 if {$DEBUG} {
-  puts "Sudo Password ...: <$sudopassword>"
+  puts "Sudo Password .......: <$sudopassword>"
 }
 
 # handle environment variable for ssh password
@@ -171,6 +183,29 @@ sshlogin $password
 
 # get sudo priviledge via sourced sshsudo procedure
 sshsudo $username $sudopassword
+
+# for any first lines
+foreach line $firstlines {
+  # send command
+  send "$line\r"
+  
+  # wait for command to complete
+  while {1} {
+    expect {
+      timeout {
+        send_error "\n$progname: command timeout during first lines\n"
+        exit 1
+      }
+      eof {
+        send_error "\n$progname: end of file while running first line command\n"
+        exit 1
+      }
+      "$ " {
+        break
+      }
+    }
+  }
+}
 
 # read lines from the command file
 while {[gets $cmdfile line] != -1} {
